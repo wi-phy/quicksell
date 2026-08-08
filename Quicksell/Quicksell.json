@@ -1,0 +1,13 @@
+{
+  "Author": "wiphy",
+  "Name": "Quicksell",
+  "Punchline": "Reprices your retainers' market listings automatically.",
+  "Description": "Walks your retainers and repositions every listing against the live market: undercuts the cheapest competitor, raises the price when you are sitting well below it, falls back on recent sale history when nobody else is selling, ignores aggressive undercuts on tiny stacks, and pulls items that are no longer worth a retainer slot.\n\n/quicksell (or /qs) opens the settings, /quicksell debug opens the market data inspector.",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "marketboard",
+    "retainer",
+    "undercut",
+    "price"
+  ]
+}

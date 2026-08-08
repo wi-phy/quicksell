@@ -1,0 +1,42 @@
+name: Build Quicksell
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+
+  build:
+    runs-on: windows-2022
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+      with:
+        submodules: recursive
+
+    - name: Install .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Download Dalamud
+      run: |
+        Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
+        Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+
+    - name: Build with dotnet
+      run: dotnet build Quicksell.sln --configuration Release
+
+    - name: Test pricing engine
+      run: dotnet test Quicksell.Pricing.Tests\Quicksell.Pricing.Tests.csproj --configuration Release --no-build
+
+    - name: Store artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: Quicksell
+        path: .\Quicksell\bin\x64\Release\Quicksell\*
+        if-no-files-found: error
+        retention-days: 1
