@@ -187,6 +187,8 @@ public class DebugWindow : Window, IDisposable
         if (listings.Count == 0)
         {
             Coloured(Grey, "Open a retainer to load this. Read straight from memory, no window driving needed.");
+            DrawContextMenuPicker();
+            DrawReprice();
             return;
         }
 
@@ -337,7 +339,9 @@ public class DebugWindow : Window, IDisposable
                 Plugin.Repricer.StartAll();
         }
 
-        Coloured(Grey, "\"This retainer\" needs the sell list open. \"Every retainer\" needs the bell list.");
+        Coloured(Grey,
+            "\"This retainer\" needs its sell list open. \"Every retainer\" needs the bell's " +
+            "retainer list open, with no retainer opened.");
 
         if (!dryRun)
             Coloured(Red, "Dry run is off. This will write prices.");

@@ -30,6 +30,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WindowSystem windowSystem = new("Quicksell");
     private readonly ConfigWindow configWindow;
     private readonly DebugWindow debugWindow;
+    private readonly ReportWindow reportWindow;
+    private readonly RetainerListOverlay overlay;
+
+    private static Plugin instance = null!;
 
     public Plugin()
     {
@@ -46,15 +50,24 @@ public sealed class Plugin : IDalamudPlugin
         Repricer = new RetainerRepricer();
 
         Collector.SnapshotUpdated += OnSnapshotUpdated;
+        Repricer.RunFinished += OnRunFinished;
 
         configWindow = new ConfigWindow();
         debugWindow = new DebugWindow();
+        reportWindow = new ReportWindow();
+        overlay = new RetainerListOverlay();
         windowSystem.AddWindow(configWindow);
         windowSystem.AddWindow(debugWindow);
+        windowSystem.AddWindow(reportWindow);
+        windowSystem.AddWindow(overlay);
+
+        instance = this;
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open Quicksell settings. \"/quicksell debug\" opens the market data inspector.",
+            HelpMessage =
+                "Open Quicksell settings. \"/quicksell report\" opens the last run's report, " +
+                "\"/quicksell debug\" the market data inspector.",
         });
 
         CommandManager.AddHandler(CommandAlias, new CommandInfo(OnCommand)
@@ -79,6 +92,10 @@ public sealed class Plugin : IDalamudPlugin
 
     internal static RetainerRepricer Repricer { get; private set; } = null!;
 
+    internal static void OpenConfig() => instance.configWindow.IsOpen = true;
+
+    internal static void OpenReport() => instance.reportWindow.IsOpen = true;
+
     internal static string ItemName(uint itemId) =>
         DataManager.GetExcelSheet<Item>().TryGetRow(itemId, out var row)
             ? row.Name.ToString()
@@ -91,10 +108,13 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= ToggleDebugUi;
 
         Collector.SnapshotUpdated -= OnSnapshotUpdated;
+        Repricer.RunFinished -= OnRunFinished;
 
         windowSystem.RemoveAllWindows();
         configWindow.Dispose();
         debugWindow.Dispose();
+        reportWindow.Dispose();
+        overlay.Dispose();
 
         Repricer.Dispose();
         Walker.Dispose();
@@ -116,10 +136,20 @@ public sealed class Plugin : IDalamudPlugin
         Framework.RunOnFrameworkThread(() => FixtureWriter.Write(snapshot));
     }
 
+    private void OnRunFinished()
+    {
+        if (Configuration.OpenReportWhenDone)
+            reportWindow.IsOpen = true;
+    }
+
     private void OnCommand(string command, string args)
     {
-        if (args.Trim().Equals("debug", StringComparison.OrdinalIgnoreCase))
+        var argument = args.Trim();
+
+        if (argument.Equals("debug", StringComparison.OrdinalIgnoreCase))
             debugWindow.Toggle();
+        else if (argument.Equals("report", StringComparison.OrdinalIgnoreCase))
+            reportWindow.Toggle();
         else
             configWindow.Toggle();
     }

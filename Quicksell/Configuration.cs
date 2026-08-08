@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Configuration;
 using Quicksell.Pricing;
 using Quicksell.Services;
@@ -22,6 +24,10 @@ public class Configuration : IPluginConfiguration
 
     public int StepDelayMs { get; set; } = 100;
 
+    public bool ShowOverlay { get; set; } = true;
+
+    public bool OpenReportWhenDone { get; set; } = true;
+
     public bool DumpFixtures { get; set; }
 
     public string MarketMenuEntry { get; set; } = string.Empty;
@@ -29,6 +35,22 @@ public class Configuration : IPluginConfiguration
     public string AdjustPriceMenuEntry { get; set; } = string.Empty;
 
     public string ReturnToInventoryMenuEntry { get; set; } = string.Empty;
+
+    public List<string> SkippedRetainers { get; set; } = [];
+
+    public bool IsSkipped(string name) =>
+        SkippedRetainers.Any(skipped => string.Equals(skipped, name, StringComparison.OrdinalIgnoreCase));
+
+    public void SetSkipped(string name, bool skipped)
+    {
+        SkippedRetainers.RemoveAll(
+            entry => string.Equals(entry, name, StringComparison.OrdinalIgnoreCase));
+
+        if (skipped)
+            SkippedRetainers.Add(name);
+
+        Save();
+    }
 
     public void Migrate()
     {

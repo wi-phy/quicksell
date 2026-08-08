@@ -1,9 +1,12 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Quicksell.Pricing;
+using Quicksell.Services;
 
 namespace Quicksell.Windows;
 
@@ -30,8 +33,64 @@ public class ConfigWindow : Window, IDisposable
         if (!tabs) return;
 
         DrawSafetyTab();
+        DrawRetainersTab();
         DrawPricingTab();
         DrawOutlierTab();
+    }
+
+    private static void DrawRetainersTab()
+    {
+        using var tab = ImRaii.TabItem("Retainers");
+        if (!tab) return;
+
+        ImGui.TextWrapped("Which retainers \"Reprice every retainer\" walks through.");
+
+        Hint("Unticking one only leaves it out of a full run. Its listings still count as yours, " +
+             "so the engine will never undercut them. Repricing it by hand from its own sell " +
+             "list still works.");
+
+        ImGui.Separator();
+
+        var retainers = RetainerIdentity.List();
+        if (retainers.Count == 0)
+        {
+            Hint("None readable. Log in and open the retainer bell once.");
+            DrawForgottenRetainers([]);
+            return;
+        }
+
+        foreach (var retainer in retainers)
+        {
+            var included = !Config.IsSkipped(retainer.Name);
+            if (ImGui.Checkbox($"{retainer.Name}##retainer{retainer.RetainerId}", ref included))
+                Config.SetSkipped(retainer.Name, !included);
+
+            ImGui.SameLine();
+            Hint(retainer.MarketItemCount == 0
+                ? "nothing listed, skipped either way"
+                : $"{retainer.MarketItemCount} listed");
+        }
+
+        DrawForgottenRetainers(retainers);
+    }
+
+    private static void DrawForgottenRetainers(IReadOnlyList<RetainerInfo> retainers)
+    {
+        var stale = Config.SkippedRetainers
+            .Where(name => !retainers.Any(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (stale.Count == 0)
+            return;
+
+        ImGui.Separator();
+        Hint($"Left out but not in this character's retainer list: {string.Join(", ", stale)}");
+
+        if (!ImGui.SmallButton("Forget them"))
+            return;
+
+        foreach (var name in stale)
+            Config.SetSkipped(name, false);
     }
 
     private static void DrawSafetyTab()
@@ -56,6 +115,25 @@ public class ConfigWindow : Window, IDisposable
         }
 
         Hint("Delisting cannot be undone by the plugin, and it needs a free inventory slot.");
+
+        var overlay = Config.ShowOverlay;
+        if (ImGui.Checkbox("Show the Quicksell button beside the retainer windows", ref overlay))
+        {
+            Config.ShowOverlay = overlay;
+            Config.Save();
+        }
+
+        Hint("Sits at the top right of the bell's retainer list and of a retainer's sell list, so " +
+             "a run does not need the debug window.");
+
+        var openReport = Config.OpenReportWhenDone;
+        if (ImGui.Checkbox("Show the report when a run ends", ref openReport))
+        {
+            Config.OpenReportWhenDone = openReport;
+            Config.Save();
+        }
+
+        Hint("It is also available at any time with /quicksell report.");
 
         var dump = Config.DumpFixtures;
         if (ImGui.Checkbox("Dump market responses as test fixtures", ref dump))

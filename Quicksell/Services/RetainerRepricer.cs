@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using ECommons.Automation;
 using ECommons.Automation.NeoTaskManager;
+using ECommons.Automation.NeoTaskManager.Tasks;
 using ECommons.UIHelpers.AddonMasterImplementations;
 using Quicksell.Pricing;
 
@@ -66,9 +67,52 @@ public sealed class RetainerRepricer : IDisposable
 
     private bool skipCurrent;
 
+    private sealed record PendingPull(MarketListing Listing, int Row);
+
+    private readonly List<MarketListing> pullPlan = [];
+
+    private PendingPull? currentPull;
+    private bool skipPull;
+    private bool pullPromptAnswered;
+    private int pulledCount;
+    private int refusedForSpace;
+    private bool bagFullReported;
+
+    private string stage = string.Empty;
+    private int retainerIndex;
+    private int retainerTotal;
+    private int rowIndex;
+    private int pullIndex;
+
     public bool IsRunning => tasks.IsBusy;
 
+    public string Stage => stage;
+
+    public string CurrentRetainer => retainerName;
+
+    public int RetainerIndex => retainerIndex;
+
+    public int RetainerTotal => retainerTotal;
+
+    public int RowIndex => rowIndex;
+
+    public int RowTotal => rows.Count;
+
+    public int PullIndex => pullIndex;
+
+    public int PullTotal => pullPlan.Count;
+
     public IReadOnlyList<RepriceOutcome> Outcomes => outcomes;
+
+    public int Written => writtenCount;
+
+    public int Pulled => pulledCount;
+
+    public int RefusedForSpace => refusedForSpace;
+
+    public bool LastRunWasDry { get; private set; }
+
+    public event Action? RunFinished;
 
     public void Dispose() => tasks.Dispose();
 
@@ -110,6 +154,14 @@ public sealed class RetainerRepricer : IDisposable
         retainerActive = true;
         retainerName = RetainerIdentity.ActiveRetainerName();
 
+        if (Plugin.Configuration.IsSkipped(retainerName))
+        {
+            Plugin.Log.Warning(
+                "[reprice] {Name} is left out of full runs in the settings, but you asked for this " +
+                "one by hand, so it is being repriced anyway",
+                retainerName);
+        }
+
         var displayed = SellListReader.DisplayOrder(listings);
         if (displayed is not null)
         {
@@ -134,14 +186,23 @@ public sealed class RetainerRepricer : IDisposable
 
         Plugin.Scheduler.Enqueue(itemIds);
 
+        retainerIndex = 1;
+        retainerTotal = 1;
+        stage = $"asking the market about {retainerName}'s items";
+
         if (Plugin.Configuration.DryRun)
         {
+            if (rowsKnown)
+                rows.AddRange(listings);
+
             tasks.Enqueue(
                 () => !Plugin.Scheduler.IsRunning,
                 "wait for the market data",
                 new TaskManagerConfiguration { TimeLimitMS = prefetchBudget, AbortOnTimeout = true });
 
             tasks.Enqueue(() => DecideAll(listings), "decide");
+            tasks.Enqueue(() => BuildPullPlan(retainerName), "plan the returns");
+            tasks.Enqueue(() => FinishRetainer(retainerName), "wrap up");
             return true;
         }
 
@@ -153,6 +214,8 @@ public sealed class RetainerRepricer : IDisposable
         for (var row = 0; row < listings.Count; row++)
             QueueRow(row);
 
+        tasks.Enqueue(() => BuildPullPlan(retainerName), "plan the returns");
+        tasks.Enqueue(() => FinishRetainer(retainerName), "wrap up");
         tasks.Enqueue(Finish, "finish");
         return true;
     }
@@ -168,10 +231,22 @@ public sealed class RetainerRepricer : IDisposable
         retainerActive = false;
         writtenCount = 0;
         retainerWritten = 0;
+        pullPlan.Clear();
+        currentPull = null;
+        skipPull = false;
+        pullPromptAnswered = false;
+        pulledCount = 0;
+        refusedForSpace = 0;
+        bagFullReported = false;
         gateRow = -1;
         waitingRow = -1;
         prepareStartedAt = null;
         retainerName = string.Empty;
+        stage = string.Empty;
+        retainerIndex = 0;
+        retainerTotal = 0;
+        rowIndex = 0;
+        pullIndex = 0;
     }
 
     public bool StartAll()
@@ -218,6 +293,12 @@ public sealed class RetainerRepricer : IDisposable
         var visiting = 0;
         foreach (var entry in entries)
         {
+            if (Plugin.Configuration.IsSkipped(entry.Name))
+            {
+                Plugin.Log.Information("[reprice] {Name}: left out of runs in the settings", entry.Name);
+                continue;
+            }
+
             if (!known.TryGetValue(entry.Name, out var expected))
             {
                 Plugin.Log.Warning(
@@ -238,9 +319,13 @@ public sealed class RetainerRepricer : IDisposable
 
         if (visiting == 0)
         {
-            Plugin.Log.Warning("[reprice] none of the retainers has anything listed");
+            Plugin.Log.Warning(
+                "[reprice] nothing to do: every retainer is either empty or left out in the settings");
             return false;
         }
+
+        retainerTotal = visiting;
+        stage = "starting";
 
         Plugin.Log.Information("[reprice] visiting {Visiting} of {Total} retainer(s)", visiting, entries.Count);
 
@@ -271,6 +356,7 @@ public sealed class RetainerRepricer : IDisposable
                     QueueRow(row);
             }
 
+            t.Enqueue(() => BuildPullPlan(entry.Name), $"plan {entry.Name}'s returns");
             t.Enqueue(() => FinishRetainer(entry.Name), $"wrap up {entry.Name}");
         });
     }
@@ -280,6 +366,10 @@ public sealed class RetainerRepricer : IDisposable
     private bool Announce(string name)
     {
         prepareStartedAt = null;
+        retainerIndex++;
+        rowIndex = 0;
+        pullIndex = 0;
+        stage = $"opening {name}";
 
         Plugin.Log.Information("[reprice] {Rule}", Rule);
         Plugin.Log.Information("[reprice] >>> {Name}", name);
@@ -331,6 +421,7 @@ public sealed class RetainerRepricer : IDisposable
         rows.AddRange(displayed);
         rowsKnown = true;
         retainerActive = true;
+        stage = $"asking the market about {entry.Name}'s items";
 
         var fresh = rows.Select(l => l.ItemId).Distinct().Where(id => !Plugin.Scheduler.IsKnown(id)).ToList();
         var reused = rows.Select(l => l.ItemId).Distinct().Count() - fresh.Count;
@@ -366,6 +457,80 @@ public sealed class RetainerRepricer : IDisposable
         }
 
         retainerActive = false;
+        return true;
+    }
+
+    private bool BuildPullPlan(string name)
+    {
+        pullPlan.Clear();
+        pullIndex = 0;
+
+        if (!retainerActive)
+            return true;
+
+        var plan = outcomes
+            .Where(o => o.Retainer == name && o.Decision?.Action == PriceAction.ReturnToInventory)
+            .Select(o => (Listing: o.Listing, Row: rows.FindIndex(l => l.Equals(o.Listing))))
+            .OrderByDescending(p => p.Row)
+            .ToList();
+
+        if (plan.Count == 0)
+            return true;
+
+        pullPlan.AddRange(plan.Select(p => p.Listing));
+
+        var bags = InventorySpace.Player();
+        var needSlot = plan.Count(p => !InventorySpace.FitsInAStackAlready(
+            p.Listing.ItemId, p.Listing.IsHq, p.Listing.Quantity));
+
+        Plugin.Log.Information(
+            "[pull] {Name}: {Count} listing(s) below the {Floor:N0} gil floor, {NeedSlot} would need " +
+            "a free slot, {Free} free across {Bags} bag(s) - returning is {State}",
+            name, plan.Count, Plugin.Configuration.Pricing.MinPrice, needSlot, bags.FreeSlots,
+            bags.Bags, Plugin.Configuration.AllowReturnToInventory ? "on" : "off");
+
+        foreach (var (listing, row) in plan)
+        {
+            Plugin.Log.Information(
+                "[pull] row {Row}: {ItemName}{Hq} x{Quantity} at {Price:N0} gil{Merge}",
+                row, listing.Name, listing.IsHq ? " (HQ)" : string.Empty, listing.Quantity,
+                listing.UnitPrice,
+                InventorySpace.FitsInAStackAlready(listing.ItemId, listing.IsHq, listing.Quantity)
+                    ? " (merges into a stack you already carry)"
+                    : string.Empty);
+        }
+
+        if (needSlot > bags.FreeSlots)
+        {
+            Plugin.Log.Warning(
+                "[pull] {Name}: only {Free} free slot(s) for {NeedSlot} item(s), the run will stop " +
+                "pulling once the bag is full",
+                name, bags.FreeSlots, needSlot);
+        }
+
+        if (plan.Any(p => p.Row < 0))
+        {
+            Plugin.Log.Warning(
+                "[pull] {Name}: some listing(s) could not be matched back to a display row",
+                name);
+        }
+
+        if (Plugin.Configuration.AllowReturnToInventory && !Plugin.Configuration.DryRun
+            && string.IsNullOrWhiteSpace(Plugin.Configuration.ReturnToInventoryMenuEntry))
+        {
+            pullPlan.Clear();
+            Plugin.Log.Error(
+                "[pull] the context menu entry that returns an item to the bag has not been set. " +
+                "Right-click a listed item and pick it in the debug window. Nothing was pulled.");
+        }
+
+        if (Plugin.Configuration.DryRun || !Plugin.Configuration.AllowReturnToInventory)
+        {
+            pullPlan.Clear();
+            return true;
+        }
+
+        InsertPulls();
         return true;
     }
 
@@ -419,25 +584,47 @@ public sealed class RetainerRepricer : IDisposable
         tasks.Enqueue(() => Begin(row), $"start on row {row}");
         tasks.Enqueue(() => ReadyForRow(row), $"hold row {row} until something has come back", WaitingForData);
         tasks.Enqueue(() => skipCurrent || GameUi.IsReady(SellListAddon), $"wait for the sell list (row {row})");
-        Settle();
+        SettleRow();
         tasks.Enqueue(() => skipCurrent || OpenContextMenu(row), $"open the context menu for row {row}");
         tasks.Enqueue(() => skipCurrent || GameUi.IsReady(ContextMenuAddon), $"wait for row {row}'s context menu", Patient);
-        Settle();
+        SettleRow();
         tasks.Enqueue(() => skipCurrent || AdjustPrice(row), $"choose adjust price for row {row}");
         tasks.Enqueue(() => skipCurrent || GameUi.IsReady(SellAddon), $"wait for row {row}'s price window", Patient);
-        Settle();
+        SettleRow();
         tasks.Enqueue(() => Identify(row), $"identify row {row}", WaitingForData);
         tasks.Enqueue(SetAskingPrice, $"type the new price for row {row}");
-        Settle();
+        SettleRow();
         tasks.Enqueue(ConfirmPrice, $"confirm row {row}");
         tasks.Enqueue(PriceWindowClosed, $"wait for row {row}'s price window to close");
-        Settle();
+        SettleRow();
+    }
+
+    private void SettleRow()
+    {
+        var delay = Plugin.Configuration.StepDelayMs;
+        if (delay <= 0)
+            return;
+
+        long? startedAt = null;
+
+        tasks.Enqueue(
+            () =>
+            {
+                if (skipCurrent)
+                    return true;
+
+                startedAt ??= Environment.TickCount64;
+                return Environment.TickCount64 - startedAt.Value >= delay;
+            },
+            "settle unless the row is being skipped");
     }
 
     private bool Begin(int row)
     {
         current = null;
         promptAnswered = false;
+        rowIndex = row + 1;
+        stage = "repricing";
 
         skipCurrent = !retainerActive
             || (rowsKnown && row >= rows.Count)
@@ -711,6 +898,155 @@ public sealed class RetainerRepricer : IDisposable
         return true;
     }
 
+    private void InsertPulls()
+    {
+        var steps = new List<TaskManagerTask>();
+        var delay = Plugin.Configuration.StepDelayMs;
+
+        void Settle()
+        {
+            if (delay > 0)
+                steps.Add(new DelayTask(delay));
+        }
+
+        for (var index = 0; index < pullPlan.Count; index++)
+        {
+            var pull = index;
+            steps.Add(new TaskManagerTask(() => BeginPull(pull), $"start pull {pull}"));
+            steps.Add(new TaskManagerTask(
+                () => skipPull || GameUi.IsReady(SellListAddon), $"wait for the sell list (pull {pull})"));
+            Settle();
+            steps.Add(new TaskManagerTask(
+                () => skipPull || OpenContextMenu(currentPull!.Row), $"open the context menu for pull {pull}"));
+            steps.Add(new TaskManagerTask(
+                () => skipPull || GameUi.IsReady(ContextMenuAddon), $"wait for pull {pull}'s context menu", Patient));
+            Settle();
+            steps.Add(new TaskManagerTask(
+                () => skipPull || ReturnToInventory(), $"choose return to inventory for pull {pull}"));
+            Settle();
+            steps.Add(new TaskManagerTask(PullFinished, $"wait for pull {pull} to leave the sell list", Patient));
+            Settle();
+        }
+
+        tasks.InsertMulti([.. steps]);
+    }
+
+    private bool BeginPull(int index)
+    {
+        currentPull = null;
+        pullPromptAnswered = false;
+        skipPull = true;
+        pullIndex = index + 1;
+        stage = "returning below-floor items to the bag";
+
+        if (Plugin.Configuration.DryRun || !Plugin.Configuration.AllowReturnToInventory)
+            return true;
+
+        if (index >= pullPlan.Count)
+            return true;
+
+        var listing = pullPlan[index];
+
+        var displayed = SellListReader.DisplayOrder(RetainerMarketReader.ActiveRetainerListings());
+        if (displayed is null)
+            return PullFailed(listing, "the sell list could not be read again");
+
+        var row = displayed.FindIndex(l => l.Slot == listing.Slot && l.ItemId == listing.ItemId);
+        if (row < 0)
+            return PullFailed(listing, "it is no longer in the sell list");
+
+        var bags = InventorySpace.Player();
+        if (bags.FreeSlots == 0
+            && !InventorySpace.FitsInAStackAlready(listing.ItemId, listing.IsHq, listing.Quantity))
+        {
+            refusedForSpace++;
+
+            if (!bagFullReported)
+            {
+                bagFullReported = true;
+                Plugin.Log.Warning(
+                    "[pull] your bag is full. Nothing is half-done - the item stays listed and the run " +
+                    "carries on repricing. Empty a slot and run it again to pull the rest.");
+            }
+
+            return PullFailed(listing, "the bag has no free slot for it");
+        }
+
+        currentPull = new PendingPull(listing, row);
+        skipPull = false;
+
+        Plugin.Log.Information(
+            "[pull] returning {Name}{Hq} x{Quantity} from row {Row} ({Free} free slot(s) left)",
+            listing.Name, listing.IsHq ? " (HQ)" : string.Empty, listing.Quantity, row, bags.FreeSlots);
+
+        return true;
+    }
+
+    private bool PullFailed(MarketListing listing, string why)
+    {
+        var index = outcomes.FindIndex(o => o.Listing.Equals(listing));
+        if (index >= 0)
+            outcomes[index] = outcomes[index] with { Failure = $"not returned: {why}" };
+
+        Plugin.Log.Warning("[pull] {Name}: {Why}, left on the market", listing.Name, why);
+        return true;
+    }
+
+    private unsafe bool ReturnToInventory()
+    {
+        var menu = GameUi.Ready(ContextMenuAddon);
+        if (menu is null)
+            return false;
+
+        var wanted = Plugin.Configuration.ReturnToInventoryMenuEntry;
+
+        foreach (var entry in new AddonMaster.ContextMenu(menu).Entries)
+        {
+            if (!string.Equals(entry.Text, wanted, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            return entry.Select();
+        }
+
+        Plugin.Log.Warning(
+            "[pull] the context menu has no \"{Wanted}\" entry; it offers {Offered}",
+            wanted, string.Join(", ", new AddonMaster.ContextMenu(menu).Entries.Select(e => e.Text)));
+
+        skipPull = true;
+        return true;
+    }
+
+    private unsafe bool PullFinished()
+    {
+        if (skipPull || currentPull is null)
+            return true;
+
+        var prompt = GameUi.Ready(PromptAddon);
+        if (prompt is not null && !pullPromptAnswered)
+        {
+            Plugin.Log.Information("[pull] confirming: {Text}", new AddonMaster.SelectYesno(prompt).Text);
+
+            Callback.Fire(prompt, true, 0);
+
+            pullPromptAnswered = true;
+            return false;
+        }
+
+        var stillListed = RetainerMarketReader.ActiveRetainerListings()
+            .Any(l => l.Slot == currentPull.Listing.Slot && l.ItemId == currentPull.Listing.ItemId);
+
+        if (stillListed)
+            return false;
+
+        pulledCount++;
+        Plugin.Log.Information(
+            "[pull] {Name} x{Quantity} is back in the bag, {Free} free slot(s) left",
+            currentPull.Listing.Name, currentPull.Listing.Quantity, InventorySpace.Player().FreeSlots);
+
+        currentPull = null;
+        return true;
+    }
+
     private bool Finish()
     {
         foreach (var miss in unvisited)
@@ -721,17 +1057,20 @@ public sealed class RetainerRepricer : IDisposable
         }
 
         var pulls = outcomes.Count(o => o.Decision?.Action == PriceAction.ReturnToInventory);
-        if (pulls > 0)
+        if (pulls > 0 && !Plugin.Configuration.DryRun && !Plugin.Configuration.AllowReturnToInventory)
         {
             Plugin.Log.Warning(
-                "[reprice] {Pulls} item(s) fell below the {Floor:N0} gil floor. Pulling them off " +
-                "the market is not implemented yet, so they were left untouched.",
+                "[reprice] {Pulls} item(s) fell below the {Floor:N0} gil floor but returning items " +
+                "to the bag is switched off, so they were left untouched.",
                 pulls, Plugin.Configuration.Pricing.MinPrice);
         }
 
         var failures = outcomes.Count(o => o.Failure is not null);
 
         Plugin.Log.Information("[reprice] {Rule}", Rule);
+
+        stage = "done";
+        LastRunWasDry = Plugin.Configuration.DryRun;
 
         if (Plugin.Configuration.DryRun)
         {
@@ -741,15 +1080,24 @@ public sealed class RetainerRepricer : IDisposable
                 "{Failures} problem(s) (dry run, nothing written)",
                 writes, pulls, outcomes.Count - writes - pulls - failures, failures);
 
+            RunFinished?.Invoke();
             return true;
+        }
+
+        if (refusedForSpace > 0)
+        {
+            Plugin.Log.Warning(
+                "[pull] {Refused} item(s) stayed on the market for want of a free bag slot",
+                refusedForSpace);
         }
 
         var opened = rowsKnown ? writtenCount : outcomes.Count;
         Plugin.Log.Information(
-            "[reprice] done: {Written} price(s) written, {Pulls} below floor, {Seen} listing(s) seen, " +
-            "{Opened} row(s) opened, {Failures} problem(s)",
-            writtenCount, pulls, outcomes.Count, opened, failures);
+            "[reprice] done: {Written} price(s) written, {Pulled} of {Pulls} below-floor item(s) " +
+            "returned, {Seen} listing(s) seen, {Opened} row(s) opened, {Failures} problem(s)",
+            writtenCount, pulledCount, pulls, outcomes.Count, opened, failures);
 
+        RunFinished?.Invoke();
         return true;
     }
 
