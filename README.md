@@ -2,7 +2,7 @@
 
 Dalamud plugin that reprices your retainers' market board listings.
 
-Built on the [goatcorp SamplePlugin][template] template.
+Scaffolded from the [goatcorp SamplePlugin][template] template, of which no code remains.
 
 ## Why
 
@@ -97,8 +97,9 @@ All the observations the plan was waiting on are now settled. Run the calibratio
 
 ## Licence
 
-AGPL-3.0-or-later, inherited from the template. Quicksell is a modified version of
-[goatcorp SamplePlugin][template], modified in 2026; see `LICENSE` for the full terms.
-ECommons, vendored as a submodule, is AGPL-3.0 as well.
+MIT, see `LICENSE`. ECommons, vendored as a submodule, is MIT too.
+
+The project was scaffolded from the AGPL-3.0 [goatcorp SamplePlugin][template], but every
+file it provided has since been replaced, so none of its terms carry over.
 
 [template]: https://github.com/goatcorp/SamplePlugin
