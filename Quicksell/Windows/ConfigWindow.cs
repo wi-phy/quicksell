@@ -123,7 +123,7 @@ public class ConfigWindow : Window, IDisposable
             Config.Save();
         }
 
-        Hint("Sits at the top right of the bell's retainer list and of a retainer's sell list, so " +
+        Hint("Sits at the bottom left of the bell's retainer list and of a retainer's sell list, so " +
              "a run does not need the debug window.");
 
         var openReport = Config.OpenReportWhenDone;
@@ -134,6 +134,15 @@ public class ConfigWindow : Window, IDisposable
         }
 
         Hint("It is also available at any time with /quicksell report.");
+
+        var openReportOnStart = Config.OpenReportWhenStarting;
+        if (ImGui.Checkbox("Show the report when a run starts", ref openReportOnStart))
+        {
+            Config.OpenReportWhenStarting = openReportOnStart;
+            Config.Save();
+        }
+
+        Hint("The report fills in as the run goes, so you can watch it instead of waiting for the end.");
 
         var dump = Config.DumpFixtures;
         if (ImGui.Checkbox("Dump market responses as test fixtures", ref dump))

@@ -28,6 +28,8 @@ public class Configuration : IPluginConfiguration
 
     public bool OpenReportWhenDone { get; set; } = true;
 
+    public bool OpenReportWhenStarting { get; set; }
+
     public bool DumpFixtures { get; set; }
 
     public string MarketMenuEntry { get; set; } = string.Empty;

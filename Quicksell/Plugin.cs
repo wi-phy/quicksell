@@ -96,6 +96,10 @@ public sealed class Plugin : IDalamudPlugin
 
     internal static void OpenReport() => instance.reportWindow.IsOpen = true;
 
+    internal static bool IsReportOpen => instance.reportWindow.IsOpen;
+
+    internal static void ToggleReport() => instance.reportWindow.Toggle();
+
     internal static string ItemName(uint itemId) =>
         DataManager.GetExcelSheet<Item>().TryGetRow(itemId, out var row)
             ? row.Name.ToString()

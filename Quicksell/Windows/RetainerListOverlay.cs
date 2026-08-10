@@ -53,7 +53,7 @@ public class RetainerListOverlay : Window, IDisposable
         return Plugin.Repricer.IsRunning && anchor != Vector2.Zero;
     }
 
-    public override void PreDraw() => ImGui.SetNextWindowPos(anchor, ImGuiCond.Always);
+    public override void PreDraw() => ImGui.SetNextWindowPos(anchor, ImGuiCond.Always, new Vector2(0f, 1f));
 
     public override void Draw()
     {
@@ -66,8 +66,8 @@ public class RetainerListOverlay : Window, IDisposable
         var dryRun = Plugin.Configuration.DryRun;
 
         var label = everyRetainer
-            ? dryRun ? "Quicksell every retainer (dry run)" : "Quicksell every retainer FOR REAL"
-            : dryRun ? "Quicksell this retainer (dry run)" : "Quicksell this retainer FOR REAL";
+            ? dryRun ? "Reprice all (dry run)" : "Reprice all"
+            : dryRun ? "Reprice (dry run)" : "Reprice";
 
         using (ImRaii.PushColor(ImGuiCol.Button, DangerButton, !dryRun))
         {
@@ -76,41 +76,38 @@ public class RetainerListOverlay : Window, IDisposable
                 var started = everyRetainer ? Plugin.Repricer.StartAll() : Plugin.Repricer.Start();
                 if (!started)
                     Plugin.Log.Warning("[reprice] the run did not start - the reason is just above");
+                else if (Plugin.Configuration.OpenReportWhenStarting)
+                    Plugin.OpenReport();
             }
         }
-
-        if (!dryRun)
-            Coloured(Red, "Dry run is off. This writes prices.");
 
         if (Missing() is { } missing)
             Coloured(Yellow, missing);
 
+        ImGui.SameLine();
         if (ImGui.SmallButton("Settings"))
             Plugin.OpenConfig();
 
         ImGui.SameLine();
-        if (ImGui.SmallButton("Last report"))
-            Plugin.OpenReport();
-
-        ImGui.SameLine();
-        Coloured(Grey, everyRetainer ? "from the bell" : "this retainer only");
+        ReportToggle();
     }
 
     private static void DrawProgress()
     {
         var repricer = Plugin.Repricer;
 
-        var where = repricer.RetainerTotal > 1
-            ? $"retainer {repricer.RetainerIndex} of {repricer.RetainerTotal}"
-            : repricer.CurrentRetainer;
+        var name = repricer.CurrentRetainer;
 
-        Coloured(Yellow, $"Quicksell: {where}");
+        var where = repricer.RetainerTotal > 1
+            ? name.Length > 0
+                ? $"retainer {repricer.RetainerIndex} of {repricer.RetainerTotal} ({name})"
+                : $"retainer {repricer.RetainerIndex} of {repricer.RetainerTotal}"
+            : name;
+
+        Coloured(Yellow, $"repricing: {where}");
         ImGui.SameLine();
         if (ImGui.Button("STOP"))
             repricer.Abort();
-
-        if (repricer.CurrentRetainer.Length > 0 && repricer.RetainerTotal > 1)
-            Coloured(Grey, repricer.CurrentRetainer);
 
         var pending = Plugin.Scheduler.Pending + Plugin.Scheduler.InFlight;
         if (pending > 0)
@@ -124,7 +121,15 @@ public class RetainerListOverlay : Window, IDisposable
         else if (repricer.RowTotal > 0)
             Bar(repricer.RowIndex / (float)repricer.RowTotal, $"item {repricer.RowIndex}/{repricer.RowTotal}");
 
-        Coloured(Grey, repricer.Stage);
+        ReportToggle();
+    }
+
+    private static void ReportToggle()
+    {
+        var open = Plugin.IsReportOpen;
+
+        if (ImGui.SmallButton(open ? "Hide report" : "Show report"))
+            Plugin.ToggleReport();
     }
 
     private static void Bar(float fraction, string label) =>
@@ -150,7 +155,7 @@ public class RetainerListOverlay : Window, IDisposable
         if (addon is null || !addon->IsVisible)
             return false;
 
-        position = new Vector2(addon->X + addon->GetScaledWidth(true) + 4, addon->Y);
+        position = new Vector2(addon->X, addon->Y + 10);
         return true;
     }
 
