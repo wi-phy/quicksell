@@ -120,7 +120,7 @@ public class PricingEngineTests
     }
 
     [Fact]
-    public void Ignores_an_aggressive_undercut_on_a_small_stack()
+    public void Ignores_an_aggressive_undercut()
     {
         var ctx = Item(6000,
         [
@@ -136,7 +136,7 @@ public class PricingEngineTests
     }
 
     [Fact]
-    public void Does_not_ignore_a_cheap_competitor_holding_a_large_stack()
+    public void Ignores_it_however_big_the_stack_behind_it_is()
     {
         var ctx = Item(6000,
         [
@@ -146,12 +146,83 @@ public class PricingEngineTests
 
         var decision = PricingEngine.Decide(ctx, Config(), Now);
 
-        Assert.Equal(99, decision.TargetPrice);
+        Assert.Equal(4999, decision.TargetPrice);
+        Assert.Equal(1, decision.IgnoredOutliers);
+    }
+
+    [Fact]
+    public void Reads_the_going_rate_off_the_board_rather_than_the_history()
+    {
+        var ctx = Item(5000,
+        [
+            new Listing(4, 2, false, 2001, "Silly"),
+            new Listing(1800, 1, false, 2002, "Liaam"),
+            new Listing(2084, 2, false, 2003, "Aelirenn"),
+            new Listing(2084, 1, false, 2004, "Hafla"),
+            new Listing(2094, 1, false, 2005, "Amasaki"),
+        ]);
+
+        var decision = PricingEngine.Decide(ctx, Config(), Now);
+
+        Assert.Equal(1799, decision.TargetPrice);
+        Assert.Equal(1, decision.IgnoredOutliers);
+        Assert.False(decision.CrashGuardTripped);
+        Assert.Null(decision.ReferencePrice);
+    }
+
+    [Fact]
+    public void Ignores_a_whole_huddle_of_silly_sellers()
+    {
+        var ctx = Item(5000,
+        [
+            new Listing(4, 2, false, 2001, "Silly"),
+            new Listing(5, 1, false, 2002, "Sillier"),
+            new Listing(1800, 1, false, 2003, "Liaam"),
+            new Listing(2084, 2, false, 2004, "Aelirenn"),
+            new Listing(2094, 1, false, 2005, "Amasaki"),
+        ]);
+
+        var decision = PricingEngine.Decide(ctx, Config(), Now);
+
+        Assert.Equal(1799, decision.TargetPrice);
+        Assert.Equal(2, decision.IgnoredOutliers);
+    }
+
+    [Fact]
+    public void A_pair_of_dreamers_at_the_top_does_not_lift_the_going_rate()
+    {
+        var ctx = Item(5000,
+        [
+            new Listing(4, 2, false, 2001, "Silly"),
+            new Listing(1800, 1, false, 2002, "Liaam"),
+            new Listing(999_999, 1, false, 2003, "Dreamer"),
+            new Listing(999_999, 1, false, 2004, "Dreamer"),
+        ], History(1800));
+
+        var decision = PricingEngine.Decide(ctx, Config(), Now);
+
+        Assert.Equal(1799, decision.TargetPrice);
+        Assert.Equal(1, decision.IgnoredOutliers);
+    }
+
+    [Fact]
+    public void Would_rather_ignore_nobody_than_follow_the_dreamers_with_no_history()
+    {
+        var ctx = Item(5000,
+        [
+            new Listing(1800, 1, false, 2001, "Liaam"),
+            new Listing(999_999, 1, false, 2002, "Dreamer"),
+            new Listing(999_999, 1, false, 2003, "Dreamer"),
+        ]);
+
+        var decision = PricingEngine.Decide(ctx, Config(), Now);
+
+        Assert.Equal(1799, decision.TargetPrice);
         Assert.Equal(0, decision.IgnoredOutliers);
     }
 
     [Fact]
-    public void Drops_the_outlier_filter_when_the_whole_market_has_collapsed()
+    public void Takes_a_uniformly_collapsed_market_at_face_value()
     {
         var ctx = Item(5000,
         [
@@ -162,13 +233,13 @@ public class PricingEngineTests
 
         var decision = PricingEngine.Decide(ctx, Config(), Now);
 
-        Assert.True(decision.CrashGuardTripped);
         Assert.Equal(99, decision.TargetPrice);
         Assert.Equal(0, decision.IgnoredOutliers);
+        Assert.False(decision.CrashGuardTripped);
     }
 
     [Fact]
-    public void Cannot_filter_outliers_without_enough_history()
+    public void Cannot_judge_a_lone_rival_without_history_to_lean_on()
     {
         var thinHistory = History(5000, count: 2);
         var ctx = Item(6000,
@@ -491,7 +562,7 @@ public class PricingEngineTests
 
         Assert.Equal(PriceAction.SetPrice, decision.Action);
         Assert.Equal(999, decision.TargetPrice);
-        Assert.True(decision.CrashGuardTripped);
+        Assert.False(decision.CrashGuardTripped);
         Assert.Equal(0, decision.IgnoredOutliers);
     }
 
@@ -515,17 +586,20 @@ public class PricingEngineTests
     [Fact]
     public void Follows_them_as_soon_as_there_is_one_more_than_allowed()
     {
-        var ctx = Item(9000,
+        var ctx = Item(20000,
         [
-            new Listing(100, 1, false, 2001, "Bradeur"),
-            new Listing(120, 1, false, 2002, "Bradeur"),
-            new Listing(140, 1, false, 2003, "Bradeur"),
-            new Listing(5000, 3, false, 2004, "Rival"),
-        ], History(5000));
+            new Listing(300, 1, false, 2001, "Bradeur"),
+            new Listing(1200, 1, false, 2002, "Bradeur"),
+            new Listing(4500, 1, false, 2003, "Bradeur"),
+            new Listing(18000, 3, false, 2004, "Rival"),
+            new Listing(18000, 3, false, 2005, "Rival"),
+            new Listing(18000, 3, false, 2006, "Rival"),
+        ]);
 
         var decision = PricingEngine.Decide(ctx, Config(), Now);
 
-        Assert.Equal(99, decision.TargetPrice);
+        Assert.Equal(299, decision.TargetPrice);
+        Assert.Equal(0, decision.IgnoredOutliers);
         Assert.True(decision.CrashGuardTripped);
     }
 

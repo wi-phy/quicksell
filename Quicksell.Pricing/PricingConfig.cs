@@ -23,8 +23,6 @@ public sealed class PricingConfig
 
     public double OutlierRatio { get; set; } = 0.30;
 
-    public double OutlierQuantityFactor { get; set; } = 0.5;
-
     public int MaxAggressiveUndercuts { get; set; } = 2;
 
     public NoCompetitionStrategy NoCompetitionStrategy { get; set; } = NoCompetitionStrategy.P75;

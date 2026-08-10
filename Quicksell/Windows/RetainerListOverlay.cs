@@ -15,7 +15,10 @@ public class RetainerListOverlay : Window, IDisposable
     private static readonly Vector4 Red = new(0.9f, 0.45f, 0.45f, 1f);
     private static readonly Vector4 DangerButton = new(0.5f, 0.2f, 0.2f, 1f);
 
+    private const float Overlap = 10f;
+
     private Vector2 anchor;
+    private Vector2 pivot;
     private bool everyRetainer;
 
     public RetainerListOverlay() : base(
@@ -36,16 +39,18 @@ public class RetainerListOverlay : Window, IDisposable
         if (!Plugin.Configuration.ShowOverlay)
             return false;
 
-        if (Anchor(RetainerNavigation.ListAddon, out var found))
+        if (Anchor(RetainerNavigation.ListAddon, out var found, out var corner))
         {
             anchor = found;
+            pivot = corner;
             everyRetainer = true;
             return true;
         }
 
-        if (Anchor(RetainerNavigation.SellListAddon, out found))
+        if (Anchor(RetainerNavigation.SellListAddon, out found, out corner))
         {
             anchor = found;
+            pivot = corner;
             everyRetainer = false;
             return true;
         }
@@ -53,7 +58,7 @@ public class RetainerListOverlay : Window, IDisposable
         return Plugin.Repricer.IsRunning && anchor != Vector2.Zero;
     }
 
-    public override void PreDraw() => ImGui.SetNextWindowPos(anchor, ImGuiCond.Always, new Vector2(0f, 1f));
+    public override void PreDraw() => ImGui.SetNextWindowPos(anchor, ImGuiCond.Always, pivot);
 
     public override void Draw()
     {
@@ -147,15 +152,29 @@ public class RetainerListOverlay : Window, IDisposable
         return null;
     }
 
-    private static unsafe bool Anchor(string name, out Vector2 position)
+    private static unsafe bool Anchor(string name, out Vector2 position, out Vector2 pivot)
     {
         position = Vector2.Zero;
+        pivot = Vector2.Zero;
 
         var addon = GameUi.Ready(name);
         if (addon is null || !addon->IsVisible)
             return false;
 
-        position = new Vector2(addon->X, addon->Y + 10);
+        var left = (float)addon->X;
+        var right = left + addon->GetScaledWidth(true);
+        var top = (float)addon->Y;
+        var bottom = top + addon->GetScaledHeight(true);
+
+        (position, pivot) = Plugin.Configuration.OverlayCorner switch
+        {
+            OverlayCorner.AboveRight => (new Vector2(right, top + Overlap), new Vector2(1f, 1f)),
+            OverlayCorner.BelowLeft => (new Vector2(left, bottom - Overlap), new Vector2(0f, 0f)),
+            OverlayCorner.BelowRight => (new Vector2(right, bottom - Overlap), new Vector2(1f, 0f)),
+            _ => (new Vector2(left, top + Overlap), new Vector2(0f, 1f)),
+        };
+
+        position += new Vector2(Plugin.Configuration.OverlayOffsetX, Plugin.Configuration.OverlayOffsetY);
         return true;
     }
 

@@ -7,6 +7,14 @@ using Quicksell.Services;
 
 namespace Quicksell;
 
+public enum OverlayCorner
+{
+    AboveLeft,
+    AboveRight,
+    BelowLeft,
+    BelowRight,
+}
+
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
@@ -25,6 +33,12 @@ public class Configuration : IPluginConfiguration
     public int StepDelayMs { get; set; } = 100;
 
     public bool ShowOverlay { get; set; } = true;
+
+    public OverlayCorner OverlayCorner { get; set; } = OverlayCorner.AboveLeft;
+
+    public int OverlayOffsetX { get; set; }
+
+    public int OverlayOffsetY { get; set; }
 
     public bool OpenReportWhenDone { get; set; } = true;
 

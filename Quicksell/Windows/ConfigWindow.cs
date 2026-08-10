@@ -33,6 +33,7 @@ public class ConfigWindow : Window, IDisposable
         if (!tabs) return;
 
         DrawSafetyTab();
+        DrawPositionTab();
         DrawRetainersTab();
         DrawPricingTab();
         DrawOutlierTab();
@@ -116,16 +117,6 @@ public class ConfigWindow : Window, IDisposable
 
         Hint("Delisting cannot be undone by the plugin, and it needs a free inventory slot.");
 
-        var overlay = Config.ShowOverlay;
-        if (ImGui.Checkbox("Show the Quicksell button beside the retainer windows", ref overlay))
-        {
-            Config.ShowOverlay = overlay;
-            Config.Save();
-        }
-
-        Hint("Sits at the bottom left of the bell's retainer list and of a retainer's sell list, so " +
-             "a run does not need the debug window.");
-
         var openReport = Config.OpenReportWhenDone;
         if (ImGui.Checkbox("Show the report when a run ends", ref openReport))
         {
@@ -173,6 +164,59 @@ public class ConfigWindow : Window, IDisposable
 
         Hint("A window can report itself ready a frame before it really is. This costs a couple " +
              "of seconds over a whole run and avoids clicking into nothing.");
+    }
+
+    private static void DrawPositionTab()
+    {
+        using var tab = ImRaii.TabItem("Position");
+        if (!tab) return;
+
+        ImGui.TextWrapped("Where the Quicksell button sits against the bell's retainer list and " +
+                          "a retainer's sell list.");
+
+        Hint("Another plugin's own overlay may already own that corner. Move it out of the way here.");
+
+        ImGui.Separator();
+
+        var overlay = Config.ShowOverlay;
+        if (ImGui.Checkbox("Show the Quicksell button beside the retainer windows", ref overlay))
+        {
+            Config.ShowOverlay = overlay;
+            Config.Save();
+        }
+
+        using var disabled = ImRaii.Disabled(!overlay);
+
+        var corner = (int)Config.OverlayCorner;
+        if (ImGui.Combo("Corner", ref corner, "Above, left\0Above, right\0Below, left\0Below, right\0"))
+        {
+            Config.OverlayCorner = (OverlayCorner)corner;
+            Config.Save();
+        }
+
+        var offsetX = Config.OverlayOffsetX;
+        if (ImGui.SliderInt("Nudge sideways (px)", ref offsetX, -400, 400))
+        {
+            Config.OverlayOffsetX = offsetX;
+            Config.Save();
+        }
+
+        var offsetY = Config.OverlayOffsetY;
+        if (ImGui.SliderInt("Nudge up or down (px)", ref offsetY, -400, 400))
+        {
+            Config.OverlayOffsetY = offsetY;
+            Config.Save();
+        }
+
+        Hint("Ctrl-click a slider to type an exact value.");
+
+        if (!ImGui.Button("Reset"))
+            return;
+
+        Config.OverlayCorner = OverlayCorner.AboveLeft;
+        Config.OverlayOffsetX = 0;
+        Config.OverlayOffsetY = 0;
+        Config.Save();
     }
 
     private static void DrawPricingTab()
@@ -241,9 +285,9 @@ public class ConfigWindow : Window, IDisposable
         if (!tab) return;
 
         ImGui.TextWrapped(
-            "A seller far below the going rate is ignored, but only when their stack is small. " +
-            "Somebody dumping a full stack at a tenth of the price is not noise to route " +
-            "around, they really will absorb the demand.");
+            "The going rate is the middle of the offers sitting above the cheapest ones. A seller " +
+            "far below that is ignored: when the board reads 4, 1800, 2084, 2084, 2094, the 4 is " +
+            "somebody being silly and the real price is 1800.");
 
         ImGui.Separator();
 
@@ -254,12 +298,10 @@ public class ConfigWindow : Window, IDisposable
             Config.Save();
         }
 
-        var qtyFactor = (float)Pricing.OutlierQuantityFactor;
-        if (ImGui.SliderFloat("...and holding at most this share of our stack", ref qtyFactor, 0.1f, 5.0f, "%.2f"))
-        {
-            Pricing.OutlierQuantityFactor = qtyFactor;
-            Config.Save();
-        }
+        Hint("The going rate is read off the sellers who agree with each other, so neither a " +
+             "handful of dumpers nor a couple of dreamers asking a million sets it. Stack sizes " +
+             "are not looked at. Sales history, when there is any, only ever vetoes: an offer " +
+             "selling at what the item really goes for is never treated as an anomaly.");
 
         ImGui.Separator();
 

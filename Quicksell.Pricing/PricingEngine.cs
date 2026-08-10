@@ -13,7 +13,7 @@ public static class PricingEngine
         var reference = ComputeReference(
             ctx, cfg, now, out var usableHistory, out var matchedHistory);
 
-        var competitors = FilterOutliers(others, ctx, cfg, reference, out var ignored, out var crashGuard);
+        var competitors = FilterOutliers(others, cfg, reference, out var ignored, out var crashGuard);
 
         long target;
         PriceReason reason;
@@ -148,35 +148,67 @@ public static class PricingEngine
 
     private static List<Listing> FilterOutliers(
         List<Listing> others,
-        ItemContext ctx,
         PricingConfig cfg,
-        long? reference,
+        long? history,
         out int ignored,
         out bool crashGuard)
     {
         ignored = 0;
         crashGuard = false;
 
-        if (reference is not { } referencePrice || others.Count == 0)
-            return others;
+        var sorted = others.OrderBy(o => o.PricePerUnit).ToList();
+        var dropped = 0;
 
-        var priceThreshold = referencePrice * cfg.OutlierRatio;
-        var quantityThreshold = Math.Max(1.0, ctx.MyQuantity * cfg.OutlierQuantityFactor);
-
-        var kept = others
-            .Where(o => !(o.PricePerUnit < priceThreshold && o.Quantity <= quantityThreshold))
-            .ToList();
-
-        var dropped = others.Count - kept.Count;
-
-        if (kept.Count == 0 || dropped > cfg.MaxAggressiveUndercuts)
+        while (sorted.Count - dropped > 1)
         {
-            crashGuard = true;
-            return others;
+            var candidate = sorted[dropped].PricePerUnit;
+
+            var above = sorted
+                .GetRange(dropped + 1, sorted.Count - dropped - 1)
+                .Select(o => o.PricePerUnit)
+                .ToList();
+
+            if ((GoingRate(above, cfg.OutlierRatio, history is null ? 3 : 2) ?? history) is not { } rate)
+                break;
+
+            if (candidate >= rate * cfg.OutlierRatio)
+                break;
+
+            if (history is { } sold && candidate >= sold * cfg.OutlierRatio)
+                break;
+
+            dropped++;
+
+            if (dropped > cfg.MaxAggressiveUndercuts)
+            {
+                crashGuard = true;
+                return others;
+            }
         }
 
+        if (dropped == 0)
+            return others;
+
         ignored = dropped;
-        return kept;
+        return sorted.GetRange(dropped, sorted.Count - dropped);
+    }
+
+    private static long? GoingRate(List<long> above, double ratio, int minSellers)
+    {
+        List<List<long>> runs = [];
+
+        foreach (var price in above)
+        {
+            if (runs.Count == 0 || price * ratio > runs[^1][^1])
+                runs.Add([]);
+
+            runs[^1].Add(price);
+        }
+
+        var biggest = runs.Max(run => run.Count);
+        var market = runs.First(run => run.Count * 2 >= biggest);
+
+        return market.Count >= minSellers ? Median(market) : null;
     }
 
     private static long FromHistory(List<long> sortedPrices, NoCompetitionStrategy strategy) => strategy switch
