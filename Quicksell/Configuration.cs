@@ -54,7 +54,11 @@ public class Configuration : IPluginConfiguration
 
     public string PutUpForSaleMenuEntry { get; set; } = string.Empty;
 
+    public string SellToRetainerMenuEntry { get; set; } = string.Empty;
+
     public bool QuickSellFromContextMenu { get; set; } = true;
+
+    public bool SellToRetainerWhenCancelled { get; set; }
 
     public List<string> SkippedRetainers { get; set; } = [];
 

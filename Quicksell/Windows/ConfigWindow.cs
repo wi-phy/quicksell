@@ -186,6 +186,25 @@ public class ConfigWindow : Window, IDisposable
         Hint("Only while a retainer's sell list is open, and only on items the market board takes. " +
              "It lists the item at one gil under the cheapest competitor and confirms, so dry run " +
              "does not hold it back. Every quick sell lands in the report.");
+
+        ImGui.Separator();
+
+        var fallback = Config.SellToRetainerWhenCancelled;
+        if (ImGui.Checkbox("When the price is refused, sell the item to the retainer for gil", ref fallback))
+        {
+            Config.SellToRetainerWhenCancelled = fallback;
+            Config.Save();
+        }
+
+        Hint("Below the floor, or no market data at all: rather than leave the item in your bag, " +
+             "Quicksell reopens the menu and takes the shop price. That cannot be undone. " +
+             "Anything else that goes wrong mid-sale leaves the item alone.");
+
+        var entry = Config.SellToRetainerMenuEntry;
+        Hint(entry.Length > 0
+            ? $"Menu entry used: \"{entry}\""
+            : "No menu entry set yet, so nothing will happen. Right-click a bag item with the sell " +
+              "list open and assign it in the debug window (/quicksell debug).");
     }
 
     private static void DrawPositionTab()

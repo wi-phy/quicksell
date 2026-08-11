@@ -308,12 +308,20 @@ public class DebugWindow : Window, IDisposable
             }
 
             ImGui.SameLine();
-            if (!ImGui.SmallButton($"put up for sale##sell{entry.Index}"))
+            if (ImGui.SmallButton($"put up for sale##sell{entry.Index}"))
+            {
+                Plugin.Configuration.PutUpForSaleMenuEntry = entry.Text;
+                Plugin.Configuration.Save();
+                Plugin.Log.Information("[quicksell] put up for sale entry set to \"{Entry}\"", entry.Text);
+            }
+
+            ImGui.SameLine();
+            if (!ImGui.SmallButton($"sell to the retainer##toretainer{entry.Index}"))
                 continue;
 
-            Plugin.Configuration.PutUpForSaleMenuEntry = entry.Text;
+            Plugin.Configuration.SellToRetainerMenuEntry = entry.Text;
             Plugin.Configuration.Save();
-            Plugin.Log.Information("[quicksell] put up for sale entry set to \"{Entry}\"", entry.Text);
+            Plugin.Log.Information("[quicksell] sell to retainer entry set to \"{Entry}\"", entry.Text);
         }
     }
 

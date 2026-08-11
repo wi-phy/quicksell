@@ -24,6 +24,8 @@ public sealed class QuickSeller : IDisposable
 
     private const long NudgeAfterMs = 2_000;
 
+    private const long RetainerSaleWaitMs = 5_000;
+
     private static readonly TaskManagerConfiguration Patient =
         new() { TimeLimitMS = 20_000, AbortOnTimeout = true };
 
@@ -46,7 +48,11 @@ public sealed class QuickSeller : IDisposable
     private bool abandoned;
     private bool sold;
     private bool promptAnswered;
+    private bool priceRefused;
+    private bool soldToRetainer;
+    private string? retainerSaleNote;
     private long closeRequestedAt;
+    private long retainerSaleAskedAt;
 
     public QuickSeller()
     {
@@ -112,18 +118,21 @@ public sealed class QuickSeller : IDisposable
         if (inventory.TargetItem is not { } item)
             return;
 
+        if (!GameUi.IsReady(SellListAddon))
+            return;
+
         var container = (InventoryType)(int)item.ContainerType;
-        if (container == InventoryType.RetainerMarket)
-            return;
+        var itemId = item.BaseItemId;
+        var withheld = Withheld(container, itemId);
 
-        if (!GameUi.IsReady(SellListAddon) || !IsMarketable(item.ItemId))
+        if (withheld is not null)
+        {
+            Plugin.Log.Information(
+                "[quicksell] no \"{Label}\" on {Name}: {Why}", MenuLabel, Plugin.ItemName(itemId), withheld);
             return;
-
-        if (IsRunning || Plugin.Repricer.IsRunning || Plugin.Walker.IsRunning)
-            return;
+        }
 
         var slot = (short)item.InventorySlot;
-        var itemId = item.ItemId;
         var isHq = item.IsHq;
         var addon = args.AddonName ?? string.Empty;
 
@@ -135,10 +144,28 @@ public sealed class QuickSeller : IDisposable
         });
     }
 
-    private static bool IsMarketable(uint itemId) =>
-        Plugin.DataManager.GetExcelSheet<Item>().TryGetRow(itemId, out var row)
-        && row.ItemSearchCategory.RowId != 0
-        && !row.IsUntradable;
+    private string? Withheld(InventoryType container, uint itemId)
+    {
+        if (container == InventoryType.RetainerMarket)
+            return "it is already up for sale";
+
+        if (!Plugin.DataManager.GetExcelSheet<Item>().TryGetRow(itemId, out var row))
+            return $"item {itemId} is not in the game's item sheet";
+
+        if (row.IsUntradable)
+            return "the game marks it untradable";
+
+        if (row.ItemSearchCategory.RowId == 0)
+            return "it has no market board category";
+
+        if (IsRunning)
+            return "one item is already going up for sale";
+
+        if (Plugin.Repricer.IsRunning || Plugin.Walker.IsRunning)
+            return "a repricing run is going on";
+
+        return null;
+    }
 
     private bool Start(InventoryType container, short slot, uint itemId, bool isHq, string addon)
     {
@@ -172,6 +199,9 @@ public sealed class QuickSeller : IDisposable
         abandoned = false;
         sold = false;
         promptAnswered = false;
+        priceRefused = false;
+        soldToRetainer = false;
+        retainerSaleNote = null;
 
         Plugin.Log.Information(
             "[quicksell] {Name}{Hq}: asking the market about it and opening the sell window",
@@ -194,6 +224,12 @@ public sealed class QuickSeller : IDisposable
         Settle();
         tasks.Enqueue(Confirm, "confirm the sale");
         tasks.Enqueue(PriceWindowClosed, "wait for the price window to close");
+        Settle();
+        tasks.Enqueue(OpenMenuForRetainerSale, "open the item's context menu again");
+        tasks.Enqueue(() => !WantsRetainerSale || GameUi.IsReady(ContextMenuAddon), "wait for the context menu", Patient);
+        Settle();
+        tasks.Enqueue(SellToRetainer, "choose sell to the retainer");
+        tasks.Enqueue(ConfirmRetainerSale, "confirm selling to the retainer", Patient);
         tasks.Enqueue(Finish, "finish");
         return true;
     }
@@ -205,21 +241,27 @@ public sealed class QuickSeller : IDisposable
             tasks.EnqueueDelay(delay);
     }
 
-    private unsafe bool OpenContextMenu()
+    private bool OpenContextMenu()
     {
         if (abandoned)
             return true;
 
+        var problem = OpenItemMenu();
+        return problem is null || Abandon(problem);
+    }
+
+    private unsafe string? OpenItemMenu()
+    {
         if (!GameUi.IsReady(SellListAddon))
-            return Abandon("the retainer's sell list was closed");
+            return "the retainer's sell list was closed";
 
         var agent = AgentInventoryContext.Instance();
         if (agent is null)
-            return Abandon("the inventory context agent is unavailable");
+            return "the inventory context agent is unavailable";
 
         var owner = GameUi.Ready(target!.Addon);
         agent->OpenForItemSlot(target.Container, target.Slot, 0, owner is null ? 0u : owner->Id);
-        return true;
+        return null;
     }
 
     private unsafe bool PutUpForSale()
@@ -286,7 +328,10 @@ public sealed class QuickSeller : IDisposable
 
         var snapshot = Plugin.Collector.TryGet(target!.ItemId);
         if (snapshot is null || !snapshot.HasOfferings)
+        {
+            priceRefused = true;
             return Abandon("no market data came back, so there is nothing to price against");
+        }
 
         var decided = PricingEngine.Decide(
             new ItemContext
@@ -307,11 +352,11 @@ public sealed class QuickSeller : IDisposable
             "[quicksell] {Name}{Hq}: {Action} - {Explanation}",
             target.Name, target.IsHq ? " (HQ)" : string.Empty, decided.Action, decided.Explanation);
 
-        if (decided.Action == PriceAction.ReturnToInventory)
+        if (decided.Action == PriceAction.ReturnToInventory || decided.Reason == PriceReason.NoData)
+        {
+            priceRefused = true;
             return Abandon($"not listed: {decided.Explanation}");
-
-        if (decided.Reason == PriceReason.NoData)
-            return Abandon($"not listed: {decided.Explanation}");
+        }
 
         decision = decided.Action == PriceAction.SetPrice
             ? decided
@@ -385,6 +430,125 @@ public sealed class QuickSeller : IDisposable
         return false;
     }
 
+    private bool WantsRetainerSale =>
+        target is not null
+        && priceRefused
+        && retainerSaleNote is null
+        && Plugin.Configuration.SellToRetainerWhenCancelled
+        && !string.IsNullOrWhiteSpace(Plugin.Configuration.SellToRetainerMenuEntry);
+
+    private bool OpenMenuForRetainerSale()
+    {
+        if (!WantsRetainerSale)
+            return true;
+
+        if (!GameUi.IsGone(SellAddon))
+            return false;
+
+        var problem = OpenItemMenu();
+        if (problem is not null)
+            GiveUpRetainerSale(problem);
+
+        return true;
+    }
+
+    private unsafe bool SellToRetainer()
+    {
+        if (!WantsRetainerSale)
+            return true;
+
+        var menu = GameUi.Ready(ContextMenuAddon);
+        if (menu is null)
+            return false;
+
+        var wanted = Plugin.Configuration.SellToRetainerMenuEntry;
+        var entries = new AddonMaster.ContextMenu(menu).Entries;
+
+        foreach (var entry in entries)
+        {
+            if (!string.Equals(entry.Text, wanted, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!entry.Select())
+                return false;
+
+            promptAnswered = false;
+            retainerSaleAskedAt = Environment.TickCount64;
+
+            Plugin.Log.Information(
+                "[quicksell] {Name}: too cheap for the market, selling it to the retainer instead",
+                target!.Name);
+
+            return true;
+        }
+
+        GameUi.Close(ContextMenuAddon);
+
+        GiveUpRetainerSale(
+            $"the item's context menu has no \"{wanted}\" entry; it offers " +
+            string.Join(" | ", Array.ConvertAll(entries, e => e.Text)));
+
+        return true;
+    }
+
+    private unsafe bool ConfirmRetainerSale()
+    {
+        if (!WantsRetainerSale)
+            return true;
+
+        var prompt = GameUi.Ready(PromptAddon);
+
+        if (prompt is not null && !promptAnswered)
+        {
+            Plugin.Log.Information(
+                "[quicksell] confirming the sale to the retainer: {Text}",
+                new AddonMaster.SelectYesno(prompt).Text);
+
+            Callback.Fire(prompt, true, 0);
+
+            promptAnswered = true;
+            return false;
+        }
+
+        if (prompt is not null)
+            return false;
+
+        if (StillInTheSlot())
+            return Environment.TickCount64 - retainerSaleAskedAt > RetainerSaleWaitMs
+                && GiveUpRetainerSale("the item never left the slot, so nothing was sold");
+
+        soldToRetainer = true;
+
+        Plugin.Log.Information("[quicksell] {Name} x{Quantity} sold to the retainer", target!.Name, quantity);
+
+        return true;
+    }
+
+    private unsafe bool StillInTheSlot()
+    {
+        var inventory = InventoryManager.Instance();
+        if (inventory is null)
+            return false;
+
+        var container = inventory->GetInventoryContainer(target!.Container);
+        if (container is null || !container->IsLoaded)
+            return false;
+
+        var item = container->GetInventorySlot(target.Slot);
+
+        return item is not null
+               && item->ItemId == target.ItemId
+               && item->Flags.HasFlag(InventoryItem.ItemFlags.HighQuality) == target.IsHq;
+    }
+
+    private bool GiveUpRetainerSale(string why)
+    {
+        retainerSaleNote = why;
+        Plugin.Log.Warning(
+            "[quicksell] {Name}: not sold to the retainer either - {Why}", target?.Name ?? "the item", why);
+        return true;
+    }
+
     private bool Abandon(string why)
     {
         abandoned = true;
@@ -402,11 +566,18 @@ public sealed class QuickSeller : IDisposable
         if (target is null)
             return true;
 
+        var told = failure;
+
+        if (told is not null && soldToRetainer)
+            told = $"{told} - sold to the retainer for gil instead";
+        else if (told is not null && retainerSaleNote is not null)
+            told = $"{told} - not sold to the retainer either: {retainerSaleNote}";
+
         outcomes.Add(new RepriceOutcome(
             retainerName,
             new MarketListing(-1, target.ItemId, target.Name, quantity, target.IsHq, suggestedPrice),
             decision,
-            failure));
+            told));
 
         if (!sold && failure is null)
             outcomes[^1] = outcomes[^1] with { Failure = "the sale was never confirmed" };
