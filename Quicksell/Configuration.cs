@@ -52,6 +52,10 @@ public class Configuration : IPluginConfiguration
 
     public string ReturnToInventoryMenuEntry { get; set; } = string.Empty;
 
+    public string PutUpForSaleMenuEntry { get; set; } = string.Empty;
+
+    public bool QuickSellFromContextMenu { get; set; } = true;
+
     public List<string> SkippedRetainers { get; set; } = [];
 
     public bool IsSkipped(string name) =>

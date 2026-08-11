@@ -34,6 +34,8 @@ public class ReportWindow : Window, IDisposable
 
     public override void Draw()
     {
+        DrawQuickSells();
+
         var outcomes = Plugin.Repricer.Outcomes;
 
         if (outcomes.Count == 0)
@@ -41,6 +43,8 @@ public class ReportWindow : Window, IDisposable
             Coloured(Grey, "No run yet. The report fills in as soon as one finishes.");
             return;
         }
+
+        ImGui.TextUnformatted("Last repricing run");
 
         DrawSummary(outcomes);
 
@@ -53,6 +57,72 @@ public class ReportWindow : Window, IDisposable
         Hint("Problems, items with no market data, and items pulled below the floor.");
 
         DrawTable(outcomes);
+    }
+
+    private static void DrawQuickSells()
+    {
+        var sells = Plugin.QuickSeller.Outcomes;
+        if (sells.Count == 0)
+            return;
+
+        var listed = sells.Count(o => o.Failure is null);
+
+        if (!ImGui.CollapsingHeader(
+                $"Quick sells: {listed} listed, {sells.Count - listed} cancelled###quicksells",
+                ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            ImGui.Separator();
+            return;
+        }
+
+        if (ImGui.SmallButton("Clear these"))
+            Plugin.QuickSeller.Forget();
+
+        using (var table = ImRaii.Table(
+                   "##quicksells", 5,
+                   ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable))
+        {
+            if (table)
+            {
+                ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 120f);
+                ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 200f);
+                ImGui.TableSetupColumn("Game asked", ImGuiTableColumnFlags.WidthFixed, 90f);
+                ImGui.TableSetupColumn("Listed at", ImGuiTableColumnFlags.WidthFixed, 90f);
+                ImGui.TableSetupColumn("Why");
+                ImGui.TableHeadersRow();
+
+                foreach (var outcome in sells)
+                {
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(outcome.Retainer);
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(
+                        $"{outcome.Listing.Name}{(outcome.Listing.IsHq ? " (HQ)" : string.Empty)} " +
+                        $"x{outcome.Listing.Quantity}");
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(outcome.Listing.UnitPrice.ToString("N0", CultureInfo.InvariantCulture));
+                    ImGui.TableNextColumn();
+
+                    if (outcome.Failure is not null)
+                    {
+                        Coloured(Red, "cancelled");
+                        ImGui.TableNextColumn();
+                        Coloured(Red, outcome.Failure);
+                        continue;
+                    }
+
+                    Coloured(Green, outcome.Decision is { } decision
+                        ? decision.TargetPrice.ToString("N0", CultureInfo.InvariantCulture)
+                        : "listed");
+
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(outcome.Decision?.Explanation ?? string.Empty);
+                }
+            }
+        }
+
+        ImGui.Separator();
     }
 
     private static void DrawSummary(IReadOnlyList<RepriceOutcome> outcomes)

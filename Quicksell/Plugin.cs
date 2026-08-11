@@ -21,6 +21,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
     [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
+    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
 
     private const string CommandName = "/quicksell";
     private const string CommandAlias = "/qs";
@@ -48,9 +49,11 @@ public sealed class Plugin : IDalamudPlugin
         AddonObserver = new AddonObserver();
         Walker = new RetainerWalker();
         Repricer = new RetainerRepricer();
+        QuickSeller = new QuickSeller();
 
         Collector.SnapshotUpdated += OnSnapshotUpdated;
         Repricer.RunFinished += OnRunFinished;
+        QuickSeller.Finished += OnRunFinished;
 
         configWindow = new ConfigWindow();
         debugWindow = new DebugWindow();
@@ -92,6 +95,8 @@ public sealed class Plugin : IDalamudPlugin
 
     internal static RetainerRepricer Repricer { get; private set; } = null!;
 
+    internal static QuickSeller QuickSeller { get; private set; } = null!;
+
     internal static void OpenConfig() => instance.configWindow.IsOpen = true;
 
     internal static void OpenReport() => instance.reportWindow.IsOpen = true;
@@ -113,6 +118,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Collector.SnapshotUpdated -= OnSnapshotUpdated;
         Repricer.RunFinished -= OnRunFinished;
+        QuickSeller.Finished -= OnRunFinished;
 
         windowSystem.RemoveAllWindows();
         configWindow.Dispose();
@@ -120,6 +126,7 @@ public sealed class Plugin : IDalamudPlugin
         reportWindow.Dispose();
         overlay.Dispose();
 
+        QuickSeller.Dispose();
         Repricer.Dispose();
         Walker.Dispose();
         AddonObserver.Dispose();

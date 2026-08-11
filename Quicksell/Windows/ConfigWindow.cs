@@ -33,6 +33,7 @@ public class ConfigWindow : Window, IDisposable
         if (!tabs) return;
 
         DrawSafetyTab();
+        DrawQuickSellTab();
         DrawPositionTab();
         DrawRetainersTab();
         DrawPricingTab();
@@ -164,6 +165,27 @@ public class ConfigWindow : Window, IDisposable
 
         Hint("A window can report itself ready a frame before it really is. This costs a couple " +
              "of seconds over a whole run and avoids clicking into nothing.");
+    }
+
+    private static void DrawQuickSellTab()
+    {
+        using var tab = ImRaii.TabItem("Quick sell");
+        if (!tab) return;
+
+        ImGui.TextWrapped("Listing one item straight from your bag, without walking a whole retainer.");
+
+        ImGui.Separator();
+
+        var quickSell = Config.QuickSellFromContextMenu;
+        if (ImGui.Checkbox($"Offer \"{QuickSeller.MenuLabel}\" when right-clicking a bag item", ref quickSell))
+        {
+            Config.QuickSellFromContextMenu = quickSell;
+            Config.Save();
+        }
+
+        Hint("Only while a retainer's sell list is open, and only on items the market board takes. " +
+             "It lists the item at one gil under the cheapest competitor and confirms, so dry run " +
+             "does not hold it back. Every quick sell lands in the report.");
     }
 
     private static void DrawPositionTab()

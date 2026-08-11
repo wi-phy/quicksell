@@ -48,6 +48,8 @@ public class DebugWindow : Window, IDisposable
         ImGui.Separator();
         DrawActiveRetainerMarket();
         ImGui.Separator();
+        DrawQuickSell();
+        ImGui.Separator();
         DrawRequest();
         ImGui.Separator();
         DrawSnapshot();
@@ -298,13 +300,49 @@ public class DebugWindow : Window, IDisposable
             }
 
             ImGui.SameLine();
-            if (!ImGui.SmallButton($"return to inventory##return{entry.Index}"))
+            if (ImGui.SmallButton($"return to inventory##return{entry.Index}"))
+            {
+                Plugin.Configuration.ReturnToInventoryMenuEntry = entry.Text;
+                Plugin.Configuration.Save();
+                Plugin.Log.Information("[reprice] return entry set to \"{Entry}\"", entry.Text);
+            }
+
+            ImGui.SameLine();
+            if (!ImGui.SmallButton($"put up for sale##sell{entry.Index}"))
                 continue;
 
-            Plugin.Configuration.ReturnToInventoryMenuEntry = entry.Text;
+            Plugin.Configuration.PutUpForSaleMenuEntry = entry.Text;
             Plugin.Configuration.Save();
-            Plugin.Log.Information("[reprice] return entry set to \"{Entry}\"", entry.Text);
+            Plugin.Log.Information("[quicksell] put up for sale entry set to \"{Entry}\"", entry.Text);
         }
+    }
+
+    private static void DrawQuickSell()
+    {
+        ImGui.TextUnformatted($"Sell one item from your bag (\"{QuickSeller.MenuLabel}\")");
+
+        var entry = Plugin.Configuration.PutUpForSaleMenuEntry;
+        Coloured(entry.Length > 0 ? Grey : Yellow,
+            entry.Length > 0
+                ? $"Put up for sale entry: \"{entry}\""
+                : "Put up for sale entry not set. With a retainer's sell list open, right-click an " +
+                  "item in your bag and assign it above.");
+
+        Coloured(Grey,
+            "The entry then shows up when you right-click a bag item while the sell list is open. " +
+            "It opens the price window, asks the market about the item, undercuts the cheapest " +
+            "competitor and confirms. Dry run does not hold it back.");
+
+        if (Plugin.QuickSeller.IsRunning)
+        {
+            Coloured(Yellow, "Listing an item...");
+            if (ImGui.Button("Stop##quicksell"))
+                Plugin.QuickSeller.Abort();
+        }
+
+        var sells = Plugin.QuickSeller.Outcomes;
+        if (sells.Count > 0)
+            Coloured(Grey, $"{sells.Count} quick sell(s) this session - see /quicksell report.");
     }
 
     private static void DrawReprice()
